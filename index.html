@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Harpon — chasse sous-marine</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+  html,body{height:100%;overflow:hidden;background:#02141f;font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+  #c{display:block;width:100%;height:100%;touch-action:none}
+  .hud{position:fixed;top:0;left:0;right:0;padding:14px 16px;display:flex;justify-content:space-between;
+       color:#eaf6ff;font-size:14px;letter-spacing:.04em;pointer-events:none;text-shadow:0 2px 8px #000}
+  .hud b{font-size:22px;display:block;letter-spacing:-.02em}
+  .hud small{font-size:10px;opacity:.6;text-transform:uppercase}
+  #oxy{position:fixed;left:16px;right:16px;bottom:18px;height:8px;background:rgba(255,255,255,.12);border-radius:4px;overflow:hidden}
+  #oxy div{height:100%;width:100%;background:#38bdf8;transition:width .1s linear}
+  #over{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;
+        background:rgba(2,15,24,.88);color:#eaf6ff;text-align:center;padding:24px;backdrop-filter:blur(6px)}
+  #over h1{font-size:26px;margin-bottom:6px}
+  #over p{color:#8fb3c9;font-size:13px;margin-bottom:22px;line-height:1.6}
+  #over .sc{font-size:54px;font-weight:800;letter-spacing:-.03em;margin-bottom:4px}
+  button{background:#38bdf8;color:#031924;border:0;padding:15px 34px;border-radius:12px;font:inherit;font-weight:800;font-size:16px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud">
+  <div><small>Poissons</small><b id="score">0</b></div>
+  <div style="text-align:right"><small>Record</small><b id="best">0</b></div>
+</div>
+<div id="oxy"><div></div></div>
+<div id="over">
+  <div class="sc" id="fscore">0</div>
+  <h1>Fin de l'apnée</h1>
+  <p id="msg">Tape les poissons avant de manquer d'air.</p>
+  <button onclick="start()">Rejouer</button>
+</div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let W=0,H=0,DPR=1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = W*DPR; cv.height = H*DPR;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize', resize);
+
+const S = {
+  run:false, score:0, oxy:1, t:0, fish:[], harpoons:[], bubbles:[], px:0, grab:false,
+  best: +(localStorage.getItem('harponBest')||0)
+};
+document.getElementById('best').textContent = S.best;
+
+function rnd(a,b){ return a + Math.random()*(b-a); }
+
+const SPECIES=[
+  {n:'sarde',   w:34, col:'#9fd4ea', col2:'#5aa9c9', pts:1, spd:1.0},
+  {n:'mulet',   w:52, col:'#c8d9c0', col2:'#8aa184', pts:2, spd:0.8},
+  {n:'mérou',   w:70, col:'#e0b084', col2:'#a9754f', pts:3, spd:0.55},
+  {n:'thazard', w:60, col:'#a9c4e8', col2:'#5f7fb0', pts:2, spd:1.35}
+];
+
+function spawn(){
+  const s = SPECIES[Math.floor(Math.random()*SPECIES.length)];
+  const dir = Math.random()<0.5 ? 1 : -1;
+  const y = rnd(H*0.18, H*0.78);
+  S.fish.push({
+    ...s, dir, y, x: dir>0 ? -s.w : W+s.w,
+    vx: dir * rnd(48, 78) * s.spd, phase: rnd(0,6.28), alive:true
+  });
+}
+
+function start(){
+  resize();
+  S.run=true; S.score=0; S.oxy=1; S.t=0; S.fish=[]; S.harpoons=[]; S.px=W/2; S.grab=false;
+  document.getElementById('score').textContent='0';
+  document.getElementById('over').style.display='none';
+  S.bubbles=Array.from({length:26},()=>({x:rnd(0,W),y:rnd(0,H),r:rnd(1,4),v:rnd(8,26)}));
+  for(let i=0;i<3;i++) spawn();
+  last = performance.now();
+  requestAnimationFrame(loop);
+}
+
+let last=0, spawnT=0;
+function loop(now){
+  const dt = Math.min(0.05,(now-last)/1000); last=now;
+  if(!S.run) return;
+  S.t += dt;
+  S.oxy -= dt/50;                       // 50 secondes d'apnée
+  if(S.oxy<=0){ S.oxy=0; gameOver(); return; }
+  document.querySelector('#oxy div').style.width=(S.oxy*100)+'%';
+  document.querySelector('#oxy div').style.background = S.oxy<0.25 ? '#f43f5e' : '#38bdf8';
+
+  // poissons
+  spawnT -= dt;
+  const cap = Math.min(11, 6 + Math.floor(S.t/25));
+  if(spawnT<=0 && S.fish.length<cap){ spawn(); spawnT = Math.max(0.34, rnd(0.55,1.25) - S.t*0.006); }
+  const boost = 1 + Math.min(1.1, S.t/70);
+  S.fish.forEach(f=>{
+    f.x += f.vx*boost*dt;
+    f.phase += dt*6;
+    f.y += Math.sin(f.phase)*0.35;
+  });
+  S.fish = S.fish.filter(f=> f.alive && f.x > -160 && f.x < W+160);
+
+  // harpons
+  S.harpoons.forEach(h=>{ h.p += dt*2.6; });
+  S.harpoons = S.harpoons.filter(h=>h.p<1);
+
+  // bulles
+  S.bubbles.forEach(b=>{ b.y -= b.v*dt; if(b.y<-10){ b.y=H+10; b.x=rnd(0,W);} });
+
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function draw(){
+  // fond dégradé
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0b3b57'); g.addColorStop(.5,'#062a3f'); g.addColorStop(1,'#02141f');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // rayons de lumière
+  ctx.save(); ctx.globalAlpha=.06; ctx.fillStyle='#bfe9ff';
+  for(let i=0;i<5;i++){
+    const x=(W/5)*i + Math.sin(S.t*0.3+i)*30;
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x+70,0); ctx.lineTo(x+180,H); ctx.lineTo(x+40,H); ctx.fill();
+  }
+  ctx.restore();
+
+  // bulles
+  ctx.fillStyle='rgba(200,235,255,.18)';
+  S.bubbles.forEach(b=>{ ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,7); ctx.fill(); });
+
+  // poissons
+  S.fish.forEach(f=>drawFish(f));
+
+  // harpons
+  S.harpoons.forEach(h=>{
+    const cx = h.x0 + (h.x1-h.x0)*h.p, cy = h.y0 + (h.y1-h.y0)*h.p;
+    ctx.strokeStyle='rgba(235,248,255,.85)'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(h.x0,h.y0); ctx.lineTo(cx,cy); ctx.stroke();
+    ctx.fillStyle='#eaf6ff'; ctx.beginPath(); ctx.arc(cx,cy,2.6,0,7); ctx.fill();
+  });
+
+  // chasseur, en bas au centre
+  const px=S.px, py=H-84;
+  ctx.save();
+  ctx.translate(px,py);
+  ctx.scale(1.15,1.15);
+  ctx.fillStyle='rgba(0,0,0,.35)'; ctx.beginPath(); ctx.ellipse(0,16,26,7,0,0,7); ctx.fill();
+  ctx.fillStyle='#0f2b3c'; ctx.beginPath(); ctx.ellipse(0,0,15,22,0,0,7); ctx.fill();
+  ctx.fillStyle='#123f57'; ctx.beginPath(); ctx.arc(0,-22,11,0,7); ctx.fill();       // masque
+  ctx.fillStyle='#7dd3fc'; ctx.beginPath(); ctx.arc(0,-22,6,0,7); ctx.fill();
+  ctx.strokeStyle='#e2e8ee'; ctx.lineWidth=3; ctx.beginPath();                    // fusil
+  ctx.moveTo(-4,-6); ctx.lineTo(Math.cos(-1.15)*40, Math.sin(-1.15)*40); ctx.stroke();
+  ctx.restore();
+}
+
+function drawFish(f){
+  ctx.save();
+  ctx.translate(f.x, f.y);
+  ctx.scale(f.dir, 1);
+  const w=f.w, h=w*0.42;
+  ctx.fillStyle=f.col;
+  ctx.beginPath(); ctx.ellipse(0,0,w*0.42,h*0.5,0,0,7); ctx.fill();
+  ctx.fillStyle=f.col2;
+  ctx.beginPath(); ctx.moveTo(-w*0.38,0); ctx.lineTo(-w*0.62,-h*0.55); ctx.lineTo(-w*0.62,h*0.55); ctx.fill();
+  ctx.fillStyle='#06121a'; ctx.beginPath(); ctx.arc(w*0.26,-h*0.1,Math.max(1.6,w*0.035),0,7); ctx.fill();
+  ctx.restore();
+}
+
+function shoot(mx,my){
+  if(!S.run) return;
+  const px=S.px, py=H-92;
+  S.harpoons.push({x0:px,y0:py,x1:mx,y1:my,p:0});
+  // test de collision sur le segment
+  let hit=null;
+  S.fish.forEach(f=>{
+    const d = distToSeg(f.x,f.y,px,py,mx,my);
+    if(d < f.w*0.32 && !hit) hit=f;
+  });
+  if(hit){
+    hit.alive=false;
+    S.score += hit.pts;
+    S.oxy = Math.min(1, S.oxy + 0.045);
+    document.getElementById('score').textContent = S.score;
+    for(let i=0;i<8;i++) S.bubbles.push({x:hit.x,y:hit.y,r:rnd(1.5,3.5),v:rnd(30,70)});
+    sfx(660);
+  } else {
+    S.oxy = Math.max(0, S.oxy - 0.02);
+    sfx(180);
+  }
+}
+
+function distToSeg(px,py,x1,y1,x2,y2){
+  const dx=x2-x1, dy=y2-y1;
+  const l2=dx*dx+dy*dy || 1;
+  let t=((px-x1)*dx+(py-y1)*dy)/l2; t=Math.max(0,Math.min(1,t));
+  const cx=x1+t*dx, cy=y1+t*dy;
+  return Math.hypot(px-cx, py-cy);
+}
+
+let AC=null;
+function sfx(freq){
+  try{
+    AC = AC || new (window.AudioContext||window.webkitAudioContext)();
+    const o=AC.createOscillator(), g=AC.createGain();
+    o.type='sine'; o.frequency.value=freq;
+    g.gain.setValueAtTime(.06,AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001,AC.currentTime+.12);
+    o.connect(g); g.connect(AC.destination); o.start(); o.stop(AC.currentTime+.13);
+  }catch(e){}
+}
+
+function gameOver(){
+  S.run=false;
+  if(S.score>S.best){ S.best=S.score; localStorage.setItem('harponBest',S.best); }
+  document.getElementById('best').textContent=S.best;
+  document.getElementById('fscore').textContent=S.score;
+  document.getElementById('msg').textContent = S.score>=12 ? 'Belle pêche. Record : '+S.best : 'Record : '+S.best;
+  document.getElementById('over').style.display='flex';
+}
+
+function pos(e){ const r=cv.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
+
+cv.addEventListener('pointerdown', e=>{
+  if(!S.run) return;
+  const p = pos(e);
+  const dyDiver = H-84, onDiver = Math.hypot(p.x-S.px, p.y-dyDiver) < 90;
+  if(onDiver || p.y > H-110){            // on attrape le chasseur
+    S.grab = true; S.px = Math.max(34, Math.min(W-34, p.x));
+  } else {
+    shoot(p.x, p.y);
+  }
+  e.preventDefault();
+}, {passive:false});
+
+cv.addEventListener('pointermove', e=>{
+  if(!S.grab || !S.run) return;
+  const p = pos(e);
+  S.px = Math.max(34, Math.min(W-34, p.x));
+  e.preventDefault();
+}, {passive:false});
+
+cv.addEventListener('pointerup', ()=>{ S.grab=false; });
+cv.addEventListener('pointercancel', ()=>{ S.grab=false; });
+
+resize();
+document.getElementById('fscore').textContent='0';
+document.getElementById('over').style.display='flex';
+document.querySelector('#over button').textContent='Jouer';
+document.querySelector('#over h1').textContent='Harpon';
+document.getElementById('msg').textContent='Glisse le chasseur pour le déplacer, tape ailleurs pour tirer. Chaque poisson te rend de l\'air.';
+</script>
+</body>
+</html>
